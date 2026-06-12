@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "litsync"
+version = "0.2.0"
+description = "Incremental mirror for PubMed, PMC, FDA, and ClinicalTrials.gov"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Literature Downloader Contributors"},
+]
+keywords = ["pubmed", "pmc", "fda", "clinicaltrials", "biomedical", "mirror"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "requests>=2.31",
+    "rich>=13.0",
+]
+
+[project.scripts]
+litsync = "litsync.cli:main"
+litsync-extract = "litsync.cli:extract_command"
+
+[project.urls]
+Homepage = "https://github.com/example/litsync"
+Repository = "https://github.com/example/litsync"
+
+[tool.setuptools.packages.find]
+where = ["src"]
