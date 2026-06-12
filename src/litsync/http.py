@@ -10,6 +10,7 @@ from typing import Callable, Optional
 import requests
 from requests.adapters import HTTPAdapter
 
+from litsync import __version__
 from litsync.config import Config
 
 LOG = logging.getLogger("litsync")
@@ -36,7 +37,7 @@ class HttpClient:
         self.session.mount("https://", adapter)
         self.session.headers.update(
             {
-                "User-Agent": f"litsync/0.2 (mailto:{cfg.email}) python-requests",
+                "User-Agent": f"litsync/{__version__} (mailto:{cfg.email}) python-requests",
                 "Accept-Encoding": "identity",
             }
         )

@@ -101,21 +101,3 @@ make extract-test DATA_ROOT=/data/literature
 - Both sources are snapshots, not daily deltas. Daily runs are still cheap because unchanged
   snapshots are skipped; changed snapshots are replaced in full.
 
-## Releasing
-
-Pushes of annotated tags matching `v*.*.*` to the `main` branch trigger the
-`Publish to PyPI` GitHub Actions workflow (see `.github/workflows/publish.yml`).
-The workflow verifies that the tag version matches `version` in `pyproject.toml`,
-builds the package with `python -m build`, and publishes it to PyPI using
-[trusted publishing](https://docs.pypi.org/trusted-publishers/).
-
-To release a new version:
-
-```bash
-# update version in pyproject.toml and commit
-git tag -a v0.3.0 -m "Release v0.3.0"
-git push origin main --tags
-```
-
-Make sure the `litsync` project on PyPI has the GitHub repository configured as a
-trusted publisher under **Publishing** → **Add a new pending publisher**.
