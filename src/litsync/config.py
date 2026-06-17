@@ -24,6 +24,7 @@ class Config:
     prune: bool = False
     count_articles: bool = False
     fda_endpoints: Optional[tuple[str, ...]] = None
+    verbose: bool = False
 
     @property
     def state_dir(self) -> Path:

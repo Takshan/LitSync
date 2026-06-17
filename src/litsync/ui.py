@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import contextlib
+import threading
+from collections import deque
 from typing import Optional
 
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
@@ -12,15 +15,28 @@ from rich.progress import (
     SpinnerColumn,
     TaskID,
     TextColumn,
-    TimeRemainingColumn,
+    TimeElapsedColumn,
     TransferSpeedColumn,
 )
 from rich.table import Table
 from rich.text import Text
+from rich.theme import Theme
 
 from litsync.utils import human_bytes, partial_note
 
-console = Console()
+_CUSTOM_THEME = Theme(
+    {
+        "info": "cyan",
+        "success": "bold green",
+        "warning": "bold yellow",
+        "error": "bold red",
+        "dim": "dim",
+        "title": "bold bright_cyan",
+        "accent": "bright_magenta",
+    }
+)
+
+console = Console(theme=_CUSTOM_THEME, highlight=False)
 
 
 class UI:
@@ -33,12 +49,8 @@ class UI:
         print(f"Planned {total} files across {sources} source groups")
 
     @contextlib.contextmanager
-    def metadata_progress(self, total: int):
-        yield _NoopProgress(total)
-
-    @contextlib.contextmanager
-    def download_progress(self):
-        yield _NoopDownloadProgress()
+    def run_progress(self, total: int):
+        yield _NoopRunProgress(total)
 
     def extract(self, rel_path: str):
         print(f"Extracting {rel_path}")
@@ -53,24 +65,131 @@ class UI:
         print(f"  bytes: {human_bytes(bytes_downloaded)}, articles: {articles_downloaded:,}")
 
 
-class _NoopProgress:
+class _NoopRunProgress:
     def __init__(self, total: int):
         self.total = total
 
-    def advance(self, n: int = 1):
+    def file_done(self):
         pass
 
-    def set_description(self, desc: str):
+    def file_failed(self):
         pass
 
-
-class _NoopDownloadProgress:
-    def add_task(self, description: str, total: Optional[int]) -> int:
+    def add_download(self, description: str, total: Optional[int]) -> int:
         return 0
 
-    def update(self, task_id: int, advance: int = 0, completed: Optional[int] = None,
-               description: Optional[str] = None):
+    def advance_download(self, task_id: int, nbytes: int):
         pass
+
+    def close_download(self, task_id: int):
+        pass
+
+
+class _RichRunProgress:
+    """Single live display: overall progress bar + per-file bars. Completed files vanish immediately."""
+
+    MAX_VISIBLE = 3
+
+    def __init__(self, total: int):
+        self._lock = threading.Lock()
+        self._done = 0
+        self._failed = 0
+        self._active = 0
+        self._visible: deque[TaskID] = deque()
+        self._hidden: set[TaskID] = set()
+
+        self._overall = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]syncing"),
+            BarColumn(bar_width=40),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("{task.completed:,}/{task.total:,} files"),
+            TextColumn("{task.fields[extra]}"),
+            TimeElapsedColumn(),
+            console=console,
+        )
+        self._overall_task = self._overall.add_task("files", total=max(total, 1), extra="")
+
+        self._files = Progress(
+            TextColumn("  [blue]{task.description}"),
+            BarColumn(bar_width=30),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            DownloadColumn(),
+            TransferSpeedColumn(),
+            console=console,
+        )
+
+        self._live = Live(
+            Group(self._overall, self._files),
+            console=console,
+            refresh_per_second=8,
+            transient=True,
+        )
+
+    def __enter__(self) -> "_RichRunProgress":
+        self._live.__enter__()
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self._live.__exit__(*exc_info)
+
+    def _refresh(self) -> None:
+        extra = f"[success]{self._done:,} ok[/success]"
+        if self._failed:
+            extra += f"  [error]{self._failed:,} failed[/error]"
+        if self._active:
+            extra += f"  [dim]{self._active} active[/dim]"
+        self._overall.update(
+            self._overall_task,
+            completed=self._done + self._failed,
+            extra=extra,
+        )
+
+    def file_done(self) -> None:
+        with self._lock:
+            self._done += 1
+            self._refresh()
+
+    def file_failed(self) -> None:
+        with self._lock:
+            self._failed += 1
+            self._refresh()
+
+    def add_download(self, description: str, total: Optional[int]) -> TaskID:
+        with self._lock:
+            self._active += 1
+            task_id = self._files.add_task(description, total=total)
+            self._promote(task_id)
+            self._refresh()
+        return task_id
+
+    def _promote(self, task_id: TaskID) -> None:
+        self._hidden.discard(task_id)
+        if task_id not in self._visible:
+            self._visible.append(task_id)
+        self._files.update(task_id, visible=True)
+        while len(self._visible) > self.MAX_VISIBLE:
+            oldest = self._visible.popleft()
+            self._files.update(oldest, visible=False)
+            self._hidden.add(oldest)
+
+    def advance_download(self, task_id: TaskID, nbytes: int) -> None:
+        self._files.update(task_id, advance=nbytes)
+
+    def close_download(self, task_id: TaskID) -> None:
+        with self._lock:
+            self._active -= 1
+            with contextlib.suppress(KeyError):
+                self._files.remove_task(task_id)
+            if task_id in self._visible:
+                self._visible.remove(task_id)
+            self._hidden.discard(task_id)
+            while self._hidden and len(self._visible) < self.MAX_VISIBLE:
+                promoted = min(self._hidden)
+                self._hidden.remove(promoted)
+                self._visible.append(promoted)
+                self._files.update(promoted, visible=True)
+            self._refresh()
 
 
 class RichUI(UI):
@@ -83,43 +202,10 @@ class RichUI(UI):
         console.print(f"[green]Planned {total} files across {sources} source groups[/green]")
 
     @contextlib.contextmanager
-    def metadata_progress(self, total: int):
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TextColumn("({task.completed}/{task.total})"),
-            console=console,
-            transient=True,
-        )
-        task = progress.add_task("Checking metadata...", total=total)
-        try:
-            with progress:
-                yield _RichProgress(task, progress)
-        finally:
-            pass
-
-    @contextlib.contextmanager
-    def download_progress(self):
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(bar_width=40),
-            "[progress.percentage]{task.percentage:>3.0f}%",
-            " ",
-            DownloadColumn(),
-            " ",
-            TransferSpeedColumn(),
-            " ",
-            TimeRemainingColumn(),
-            console=console,
-        )
-        try:
-            with progress:
-                yield _RichDownloadProgress(progress)
-        finally:
-            pass
+    def run_progress(self, total: int):
+        rp = _RichRunProgress(total)
+        with rp:
+            yield rp
 
     def extract(self, rel_path: str):
         console.print(f"[yellow]Extracting[/yellow] {rel_path}")
@@ -198,33 +284,23 @@ class RichUI(UI):
             )
 
 
-class _RichProgress:
-    def __init__(self, task: TaskID, progress: Progress):
-        self.task = task
-        self.progress = progress
-
-    def advance(self, n: int = 1):
-        self.progress.advance(self.task, n)
-
-    def set_description(self, desc: str):
-        self.progress.update(self.task, description=desc)
-
-
-class _RichDownloadProgress:
-    def __init__(self, progress: Progress):
-        self.progress = progress
-
-    def add_task(self, description: str, total: Optional[int]) -> int:
-        return self.progress.add_task(description, total=total)
-
-    def update(self, task_id: int, advance: int = 0, completed: Optional[int] = None,
-               description: Optional[str] = None):
-        kwargs = {"advance": advance}
-        if completed is not None:
-            kwargs["completed"] = completed
-        if description is not None:
-            kwargs["description"] = description
-        self.progress.update(task_id, **kwargs)
+def print_banner() -> None:
+    text = Text()
+    text.append(" ██╗     ██╗████████╗███████╗██╗   ██╗███╗   ██╗ ██████╗\n", style="bold bright_cyan")
+    text.append(" ██║     ██║╚══██╔══╝██╔════╝██║   ██║████╗  ██║██╔════╝\n", style="bold bright_cyan")
+    text.append(" ██║     ██║   ██║   ███████╗████████║██╔██╗ ██║██║     \n", style="bold bright_cyan")
+    text.append(" ██║     ██║   ██║   ╚════██║╚══██╔══╝██║╚██╗██║██║     \n", style="bold bright_cyan")
+    text.append(" ███████╗██║   ██║   ███████║   ██║   ██║ ╚████║╚██████╗\n", style="bold bright_cyan")
+    text.append(" ╚══════╝╚═╝   ╚═╝   ╚══════╝   ╚═╝   ╚═╝  ╚═══╝ ╚═════╝ ", style="bold bright_cyan")
+    console.print(
+        Panel(
+            text,
+            title="[bold]LitSync[/bold]",
+            subtitle="[dim]incremental mirror for biomedical literature[/dim]",
+            border_style="bright_cyan",
+            padding=(0, 2),
+        )
+    )
 
 
 def new_src_stats() -> dict:

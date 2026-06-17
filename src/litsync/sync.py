@@ -66,7 +66,7 @@ class Syncer:
 
     # ---- worker --------------------------------------------------------- #
 
-    def _process(self, task: Task, download_progress) -> None:
+    def _process(self, task: Task, rp) -> None:
         is_new = self.db.get(task.source, task.filename) is None
         self.db.upsert_seen(FileRecord(task.source, task.filename, task.url, task.rel_path))
         self._record_seen(task.source, is_new)
@@ -76,14 +76,17 @@ class Syncer:
             self.db.mark(task.source, task.filename, status="failed", error=str(exc))
             self._bump("failed", task.source)
             LOG.error("metadata failed for %s: %s", task.filename, exc)
+            rp.file_failed()
             return
 
         if not needs:
             self._bump("skipped", task.source)
+            rp.file_done()
             return
 
         if self.cfg.dry_run:
             self._bump("downloaded", task.source, expected_size or 0)
+            rp.file_done()
             return
 
         expected_md5 = None
@@ -92,17 +95,25 @@ class Syncer:
                 expected_md5 = md5_file_from_url(self.http.get_text(task.md5_url))
                 self.db.mark(task.source, task.filename, md5=expected_md5)
 
-        task_id = download_progress.add_task(task.filename, expected_size)
+        task_id = rp.add_download(task.filename, expected_size)
 
         def progress_cb(nbytes: int):
-            download_progress.update(task_id, advance=nbytes)
+            rp.advance_download(task_id, nbytes)
 
         try:
             attempts = (self.db.get(task.source, task.filename)["attempts"] or 0) + 1
             self.db.mark(task.source, task.filename, status="pending", attempts=attempts)
             written = self.http.download(task.url, task.dest, expected_size, progress_cb)
-            download_progress.update(task_id, completed=written)
+        except Exception as exc:
+            rp.close_download(task_id)
+            self.db.mark(task.source, task.filename, status="failed", error=str(exc))
+            self._bump("failed", task.source)
+            LOG.error("download failed for %s: %s", task.filename, exc)
+            rp.file_failed()
+            return
 
+        rp.close_download(task_id)
+        try:
             if expected_md5:
                 actual = md5_file(task.dest)
                 if actual.lower() != expected_md5.lower():
@@ -119,10 +130,12 @@ class Syncer:
                 self._extract_zip(task)
             self._count_and_store(task)
             LOG.info("ok %s", task.rel_path)
+            rp.file_done()
         except Exception as exc:
             self.db.mark(task.source, task.filename, status="failed", error=str(exc))
             self._bump("failed", task.source)
-            LOG.error("download failed for %s: %s", task.filename, exc)
+            LOG.error("post-download failed for %s: %s", task.filename, exc)
+            rp.file_failed()
 
     def _bump(self, key: str, source: Optional[str] = None, nbytes: int = 0) -> None:
         with self._stats_lock:
@@ -220,11 +233,9 @@ class Syncer:
                 self.source_urls.setdefault(t.source, t.url.rsplit("/", 1)[0] + "/")
         self.ui.planned(len(all_tasks), len(by_source))
 
-        with self.ui.metadata_progress(len(all_tasks)) as meta, \
-             self.ui.download_progress() as dl:
+        with self.ui.run_progress(len(all_tasks)) as rp:
             def work(task: Task):
-                self._process(task, dl)
-                meta.advance(1)
+                self._process(task, rp)
 
             with ThreadPoolExecutor(max_workers=self.cfg.workers) as pool:
                 futures = [pool.submit(work, t) for t in all_tasks]
