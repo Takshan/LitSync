@@ -3,6 +3,7 @@
 A modern, daily-runnable CLI for mirroring bulk biomedical datasets. It tracks every
 file in a SQLite state DB so re-runs do the minimum work: already-verified immutable
 files are skipped with no network request beyond the directory/manifest listing.
+<img width="789" height="880" alt="image" src="https://github.com/user-attachments/assets/d01f39ef-21cc-418f-a558-5ab82b84f357" />
 
 ## Install
 
