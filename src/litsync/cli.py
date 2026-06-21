@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import logging
 import os
 import sys
@@ -108,6 +109,9 @@ def sync_command(cfg: Config, ui: UI) -> int:
 
 
 def extract_command(argv: Optional[list[str]] = None) -> int:
+    raw = argv if argv is not None else sys.argv[1:]
+    use_plain = "--no-rich" in raw
+
     ap = argparse.ArgumentParser(
         prog="litsync-extract",
         description="Extract litsync mirror into sharded JSONL",
@@ -118,21 +122,47 @@ def extract_command(argv: Optional[list[str]] = None) -> int:
                     choices=["pubmed", "pmc", "fda", "clinicaltrials"])
     ap.add_argument("--shard-size-mb", type=int, default=256)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
+                    help="skip source files already recorded in resume state (default: on)")
+    ap.add_argument("--reset", action="store_true",
+                    help="clear resume state and re-extract from the beginning")
+    ap.add_argument("--yearly", action="store_true",
+                    help="split output into subdirectories by record year")
+    ap.add_argument("--no-rich", action="store_true",
+                    help="disable Rich progress bars and use plain text output")
     ap.add_argument("--verbose", "-v", action="store_true")
     args = ap.parse_args(argv)
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(message)s",
-    )
-    run_extraction(
-        args.data_root.expanduser().resolve(),
-        args.out.expanduser().resolve(),
+    data_root = args.data_root.expanduser().resolve()
+    out_dir = args.out.expanduser().resolve()
+    log_dir = data_root / "_state" / "logs"
+
+    if not use_plain and not console.is_terminal:
+        use_plain = True
+    ui = UI() if use_plain else RichUI()
+    if not use_plain:
+        print_banner()
+
+    setup_logging(log_dir, verbose=args.verbose)
+    LOG.info("litsync-extract starting | root=%s out=%s sources=%s shard=%dMB limit=%s resume=%s reset=%s yearly=%s",
+             data_root, out_dir, args.sources, args.shard_size_mb, args.limit,
+             args.resume, args.reset, args.yearly)
+
+    started = datetime.datetime.now().isoformat(timespec="seconds")
+    manifest = run_extraction(
+        data_root,
+        out_dir,
         args.sources,
         args.shard_size_mb,
         args.limit,
+        ui,
+        resume=args.resume,
+        reset=args.reset,
+        yearly=args.yearly,
     )
-    return 0
+    finished = datetime.datetime.now().isoformat(timespec="seconds")
+    ui.extract_summary(started, finished, manifest)
+    return 130 if manifest.get("interrupted") else 0
 
 
 def main(argv: Optional[list[str]] = None) -> int:

@@ -52,6 +52,11 @@ class UI:
     def run_progress(self, total: int):
         yield _NoopRunProgress(total)
 
+    @contextlib.contextmanager
+    def extract_progress(self, total: int):
+        print(f"Extracting {total} files ...")
+        yield _NoopExtractProgress(total)
+
     def extract(self, rel_path: str):
         print(f"Extracting {rel_path}")
 
@@ -63,6 +68,35 @@ class UI:
         print(f"  finished: {finished}")
         print(f"  newly downloaded: {new_dl}, skipped: {stats.get('skipped', 0)}, failed: {stats.get('failed', 0)}")
         print(f"  bytes: {human_bytes(bytes_downloaded)}, articles: {articles_downloaded:,}")
+
+    def extract_summary(self, started: str, finished: str, stats: dict):
+        if stats.get("interrupted"):
+            print("litsync-extract interrupted by user")
+        else:
+            print("litsync-extract complete")
+        print(f"  started: {started}")
+        print(f"  finished: {finished}")
+        for key in ("pubmed", "pmc", "fda", "clinicaltrials"):
+            files = stats.get(f"{key}_files", 0)
+            skipped = stats.get(f"{key}_skipped", 0)
+            records = stats.get(f"{key}_records", 0)
+            if files or skipped or records:
+                print(f"  {key}: {files} files, {records} records", end="")
+                if skipped:
+                    print(f" ({skipped} skipped)", end="")
+                print()
+        skipped_total = stats.get("skipped_files", 0)
+        if skipped_total:
+            print(f"  skipped files: {skipped_total}")
+        print(f"  errors: {stats.get('errors', 0)}")
+        print(f"  total records: {stats.get('total_records', 0):,}")
+        print(f"  shards: {stats.get('shards', 0)}")
+        if stats.get("yearly"):
+            print("  per-year:")
+            for year, info in sorted(stats.get("years", {}).items()):
+                print(f"    {year}: {info.get('records', 0):,} records, {info.get('shards', 0)} shards")
+        print(f"  elapsed: {stats.get('elapsed_sec', 0):.1f}s")
+        print(f"  output: {stats.get('out_dir', '')}")
 
 
 class _NoopRunProgress:
@@ -82,6 +116,23 @@ class _NoopRunProgress:
         pass
 
     def close_download(self, task_id: int):
+        pass
+
+
+class _NoopExtractProgress:
+    def __init__(self, total: int):
+        self.total = total
+
+    def set_current(self, rel_path: str, records: int):
+        pass
+
+    def file_done(self):
+        pass
+
+    def file_failed(self):
+        pass
+
+    def file_skipped(self):
         pass
 
 
@@ -192,6 +243,82 @@ class _RichRunProgress:
             self._refresh()
 
 
+class _RichExtractProgress:
+    """Single live display: overall extraction progress + current file label."""
+
+    def __init__(self, total: int):
+        self._lock = threading.Lock()
+        self._done = 0
+        self._failed = 0
+        self._skipped = 0
+
+        self._overall = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]extracting"),
+            BarColumn(bar_width=40),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("{task.completed:,}/{task.total:,} files"),
+            TextColumn("{task.fields[extra]}"),
+            TimeElapsedColumn(),
+            console=console,
+        )
+        self._overall_task = self._overall.add_task("files", total=max(total, 1), extra="")
+
+        self._current = Progress(
+            TextColumn("  [blue]{task.description}"),
+            console=console,
+        )
+        self._current_task = self._current.add_task("waiting ...", total=None)
+
+        self._live = Live(
+            Group(self._overall, self._current),
+            console=console,
+            refresh_per_second=8,
+            transient=True,
+        )
+
+    def __enter__(self) -> "_RichExtractProgress":
+        self._live.__enter__()
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self._live.__exit__(*exc_info)
+
+    def _refresh(self) -> None:
+        extra = f"[success]{self._done:,} ok[/success]"
+        if self._skipped:
+            extra += f"  [dim]{self._skipped:,} skipped[/dim]"
+        if self._failed:
+            extra += f"  [error]{self._failed:,} failed[/error]"
+        self._overall.update(
+            self._overall_task,
+            completed=self._done + self._failed + self._skipped,
+            extra=extra,
+        )
+
+    def set_current(self, rel_path: str, records: int):
+        with self._lock:
+            self._current.update(
+                self._current_task,
+                description=f"{rel_path}  ({records:,} records)",
+            )
+
+    def file_done(self) -> None:
+        with self._lock:
+            self._done += 1
+            self._refresh()
+
+    def file_failed(self) -> None:
+        with self._lock:
+            self._failed += 1
+            self._refresh()
+
+    def file_skipped(self) -> None:
+        with self._lock:
+            self._skipped += 1
+            self._refresh()
+
+
 class RichUI(UI):
     """Rich-based progress bars and tables."""
 
@@ -206,6 +333,12 @@ class RichUI(UI):
         rp = _RichRunProgress(total)
         with rp:
             yield rp
+
+    @contextlib.contextmanager
+    def extract_progress(self, total: int):
+        ep = _RichExtractProgress(total)
+        with ep:
+            yield ep
 
     def extract(self, rel_path: str):
         console.print(f"[yellow]Extracting[/yellow] {rel_path}")
@@ -282,6 +415,75 @@ class RichUI(UI):
             console.print(
                 "[dim]Run --count-articles to backfill record counts for already-downloaded files.[/dim]"
             )
+
+    def extract_summary(self, started: str, finished: str, stats: dict):
+        title = "litsync-extract summary"
+        if stats.get("interrupted"):
+            title += " [INTERRUPTED]"
+        table = Table(title=title, show_header=True, header_style="bold magenta")
+        table.add_column("Source", style="cyan")
+        table.add_column("Files", justify="right")
+        table.add_column("Skipped", justify="right")
+        table.add_column("Records", justify="right")
+        table.add_column("Errors", justify="right")
+
+        labels = {
+            "pubmed": "PubMed",
+            "pmc": "PubMed Central",
+            "fda": "openFDA",
+            "clinicaltrials": "ClinicalTrials.gov",
+        }
+
+        grand_files = grand_skipped = grand_records = grand_errors = 0
+        for key in ("pubmed", "pmc", "fda", "clinicaltrials"):
+            files = stats.get(f"{key}_files", 0)
+            skipped = stats.get(f"{key}_skipped", 0)
+            records = stats.get(f"{key}_records", 0)
+            errors = stats.get(f"{key}_errors", 0) if f"{key}_errors" in stats else 0
+            if files == 0 and skipped == 0 and records == 0 and errors == 0:
+                continue
+            table.add_row(
+                labels.get(key, key),
+                f"{files:,}",
+                f"{skipped:,}" if skipped else "—",
+                f"{records:,}",
+                f"{errors:,}" if errors else "—",
+            )
+            grand_files += files
+            grand_skipped += skipped
+            grand_records += records
+            grand_errors += errors
+
+        table.add_row(
+            "[bold]TOTAL[/bold]",
+            f"{grand_files:,}",
+            f"{grand_skipped:,}" if grand_skipped else "—",
+            f"{grand_records:,}",
+            f"{grand_errors:,}" if grand_errors else "—",
+            style="bold green",
+        )
+        console.print()
+        console.print(table)
+        console.print(
+            f"[dim]started: {started}  ·  finished: {finished}  · "
+            f" shards: {stats.get('shards', 0)}  · "
+            f" total records: {stats.get('total_records', 0):,}  · "
+            f" elapsed: {stats.get('elapsed_sec', 0):.1f}s  · "
+            f" output: {stats.get('out_dir', '')}[/dim]"
+        )
+        if stats.get("yearly"):
+            console.print()
+            year_table = Table(title="per-year breakdown", show_header=True, header_style="bold magenta")
+            year_table.add_column("Year", style="cyan")
+            year_table.add_column("Records", justify="right")
+            year_table.add_column("Shards", justify="right")
+            for year, info in sorted(stats.get("years", {}).items()):
+                year_table.add_row(
+                    year,
+                    f"{info.get('records', 0):,}",
+                    f"{info.get('shards', 0):,}",
+                )
+            console.print(year_table)
 
 
 def print_banner() -> None:
