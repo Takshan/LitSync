@@ -128,6 +128,12 @@ def extract_command(argv: Optional[list[str]] = None) -> int:
                     help="clear resume state and re-extract from the beginning")
     ap.add_argument("--yearly", action="store_true",
                     help="split output into subdirectories by record year")
+    ap.add_argument("--require-abstract", action="store_true",
+                    help="skip records with an empty abstract")
+    ap.add_argument("--require-body", action="store_true",
+                    help="skip records with an empty body")
+    ap.add_argument("--require-text", action="store_true",
+                    help="skip records with neither abstract nor body text")
     ap.add_argument("--no-rich", action="store_true",
                     help="disable Rich progress bars and use plain text output")
     ap.add_argument("--verbose", "-v", action="store_true")
@@ -144,9 +150,10 @@ def extract_command(argv: Optional[list[str]] = None) -> int:
         print_banner()
 
     setup_logging(log_dir, verbose=args.verbose)
-    LOG.info("litsync-extract starting | root=%s out=%s sources=%s shard=%dMB limit=%s resume=%s reset=%s yearly=%s",
+    LOG.info("litsync-extract starting | root=%s out=%s sources=%s shard=%dMB limit=%s resume=%s reset=%s yearly=%s require_abstract=%s require_body=%s require_text=%s",
              data_root, out_dir, args.sources, args.shard_size_mb, args.limit,
-             args.resume, args.reset, args.yearly)
+             args.resume, args.reset, args.yearly,
+             args.require_abstract, args.require_body, args.require_text)
 
     started = datetime.datetime.now().isoformat(timespec="seconds")
     manifest = run_extraction(
@@ -159,6 +166,9 @@ def extract_command(argv: Optional[list[str]] = None) -> int:
         resume=args.resume,
         reset=args.reset,
         yearly=args.yearly,
+        require_abstract=args.require_abstract,
+        require_body=args.require_body,
+        require_text=args.require_text,
     )
     finished = datetime.datetime.now().isoformat(timespec="seconds")
     ui.extract_summary(started, finished, manifest)

@@ -89,7 +89,13 @@ class UI:
         if skipped_total:
             print(f"  skipped files: {skipped_total}")
         print(f"  errors: {stats.get('errors', 0)}")
-        print(f"  total records: {stats.get('total_records', 0):,}")
+        seen = stats.get('records_seen', 0)
+        total = stats.get('total_records', 0)
+        filtered = stats.get('filtered_records', 0)
+        print(f"  records seen: {seen:,}")
+        if filtered:
+            print(f"  records filtered out: {filtered:,} ({100*filtered/seen:.1f}%)")
+        print(f"  records written: {total:,}")
         print(f"  shards: {stats.get('shards', 0)}")
         if stats.get("yearly"):
             print("  per-year:")
@@ -464,10 +470,17 @@ class RichUI(UI):
         )
         console.print()
         console.print(table)
+        seen = stats.get('records_seen', 0)
+        total = stats.get('total_records', 0)
+        filtered = stats.get('filtered_records', 0)
+        seen_txt = f"seen: {seen:,}"
+        if filtered:
+            seen_txt += f", filtered out: {filtered:,} ({100*filtered/seen:.1f}%)"
         console.print(
             f"[dim]started: {started}  ·  finished: {finished}  · "
             f" shards: {stats.get('shards', 0)}  · "
-            f" total records: {stats.get('total_records', 0):,}  · "
+            f" written: {total:,}  · "
+            f" {seen_txt}  · "
             f" elapsed: {stats.get('elapsed_sec', 0):.1f}s  · "
             f" output: {stats.get('out_dir', '')}[/dim]"
         )

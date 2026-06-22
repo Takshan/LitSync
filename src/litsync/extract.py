@@ -43,6 +43,24 @@ def findall_local(parent: ET.Element, name: str) -> list[ET.Element]:
     return [el for el in parent.iter() if local_tag(el.tag) == name]
 
 
+def _record_has_required_text(
+    rec: dict,
+    require_abstract: bool,
+    require_body: bool,
+    require_text: bool,
+) -> bool:
+    """Return True if the record passes the content filters."""
+    abstract = (rec.get("abstract") or "").strip()
+    body = (rec.get("body") or "").strip()
+    if require_abstract and not abstract:
+        return False
+    if require_body and not body:
+        return False
+    if require_text and not abstract and not body:
+        return False
+    return True
+
+
 # --------------------------------------------------------------------------- #
 # PubMed
 # --------------------------------------------------------------------------- #
@@ -438,7 +456,10 @@ def iter_source_files(data_root: Path, sources: list[str], limit: Optional[int])
 def run_extraction(data_root: Path, out_dir: Path, sources: list[str],
                    shard_size_mb: int, limit: Optional[int], ui: UI,
                    resume: bool = True, reset: bool = False,
-                   yearly: bool = False) -> dict:
+                   yearly: bool = False,
+                   require_abstract: bool = False,
+                   require_body: bool = False,
+                   require_text: bool = False) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     state_path = data_root / "_state" / "extract_state.sqlite"
@@ -468,6 +489,8 @@ def run_extraction(data_root: Path, out_dir: Path, sources: list[str],
         "pubmed_skipped": 0, "pmc_skipped": 0, "fda_skipped": 0,
         "clinicaltrials_skipped": 0,
         "errors": 0,
+        "records_seen": 0,
+        "filtered_records": 0,
     }
     t0 = time.time()
 
@@ -495,6 +518,12 @@ def run_extraction(data_root: Path, out_dir: Path, sources: list[str],
                         raw = gzip.decompress(path.read_bytes())
                         n = 0
                         for rec in parse_pubmed(raw, rel):
+                            stats["records_seen"] += 1
+                            if not _record_has_required_text(
+                                rec, require_abstract, require_body, require_text
+                            ):
+                                stats["filtered_records"] += 1
+                                continue
                             writers.write(rec, years_touched)
                             n += 1
                         stats["pubmed_records"] += n
@@ -502,6 +531,12 @@ def run_extraction(data_root: Path, out_dir: Path, sources: list[str],
                     elif kind == "pmc":
                         n = 0
                         for rec in parse_pmc_tar(path, rel):
+                            stats["records_seen"] += 1
+                            if not _record_has_required_text(
+                                rec, require_abstract, require_body, require_text
+                            ):
+                                stats["filtered_records"] += 1
+                                continue
                             writers.write(rec, years_touched)
                             n += 1
                             if n % 5000 == 0:
@@ -511,12 +546,24 @@ def run_extraction(data_root: Path, out_dir: Path, sources: list[str],
                     elif kind == "fda":
                         n = 0
                         for rec in parse_fda_json_file(path, rel):
+                            stats["records_seen"] += 1
+                            if not _record_has_required_text(
+                                rec, require_abstract, require_body, require_text
+                            ):
+                                stats["filtered_records"] += 1
+                                continue
                             writers.write(rec, years_touched)
                             n += 1
                         stats["fda_records"] += n
                         stats["fda_files"] += 1
                     elif kind == "clinicaltrials":
                         rec = parse_clinicaltrials_xml_file(path, rel)
+                        stats["records_seen"] += 1
+                        if rec and not _record_has_required_text(
+                            rec, require_abstract, require_body, require_text
+                        ):
+                            stats["filtered_records"] += 1
+                            rec = None
                         n = 1 if rec else 0
                         if rec:
                             writers.write(rec, years_touched)
@@ -567,6 +614,9 @@ def run_extraction(data_root: Path, out_dir: Path, sources: list[str],
             "interrupted": interrupted,
             "resume": resume,
             "yearly": yearly,
+            "require_abstract": require_abstract,
+            "require_body": require_body,
+            "require_text": require_text,
             "years": {
                 year: {"records": year_records.get(year, 0),
                        "shards": year_shards.get(year, 0)}
