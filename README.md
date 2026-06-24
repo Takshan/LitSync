@@ -79,6 +79,7 @@ Or with Make:
 make extract DATA_ROOT=/data/literature CORPUS_OUT=/data/corpus
 make extract-test DATA_ROOT=/data/literature
 ```
+<img width="930" height="384" alt="image" src="https://github.com/user-attachments/assets/1a9dd910-2279-4502-836c-de8e02ecb9da" />
 
 ## Integrity model
 
