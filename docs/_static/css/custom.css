@@ -1,0 +1,50 @@
+/* LitSync documentation custom styles */
+
+:root {
+  --litsync-primary: #2563eb;
+  --litsync-secondary: #0f172a;
+  --litsync-accent: #10b981;
+}
+
+html[data-theme="light"] {
+  --pst-color-primary: var(--litsync-primary);
+  --pst-color-link: var(--litsync-primary);
+  --pst-color-link-hover: #1d4ed8;
+}
+
+html[data-theme="dark"] {
+  --pst-color-primary: #3b82f6;
+  --pst-color-link: #60a5fa;
+  --pst-color-link-hover: #93c5fd;
+}
+
+/* Improve readability */
+.bd-main .bd-content .bd-article-container {
+  max-width: 1000px;
+}
+
+/* Custom admonitions */
+.admonition.litsync-tip {
+  border-left-color: var(--litsync-accent);
+}
+
+/* API reference styling */
+.sig-name {
+  font-weight: 600;
+}
+
+.sig-param {
+  font-style: normal;
+  color: var(--pst-color-text-muted);
+}
+
+/* Tables */
+.table td,
+.table th {
+  font-size: 0.95rem;
+}
+
+/* Footer */
+.footer-item {
+  font-size: 0.85rem;
+}

@@ -28,6 +28,16 @@ dependencies = [
     "rich>=13.0",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+docs = [
+    "sphinx>=7.0",
+    "pydata-sphinx-theme>=0.15",
+    "myst-parser>=3.0",
+    "sphinx-copybutton>=0.5",
+    "sphinx-design>=0.6",
+]
+
 [project.scripts]
 litsync = "litsync.cli:main"
 litsync-extract = "litsync.cli:extract_command"

@@ -4,6 +4,8 @@ A modern, daily-runnable CLI for mirroring bulk biomedical datasets. It tracks e
 file in a SQLite state DB so re-runs do the minimum work: already-verified immutable
 files are skipped with no network request beyond the directory/manifest listing.
 
+**Documentation:** https://takshan.github.io/LitSync
+
 ## Install
 
 ```bash
