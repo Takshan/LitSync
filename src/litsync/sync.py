@@ -188,7 +188,8 @@ class Syncer:
 
     # ---- prune ---------------------------------------------------------- #
 
-    def _prune(self, tasks_by_source: dict[str, list[Task]]) -> None:
+    def _prune(self, tasks_by_source: dict[str, list[Task]],
+               skip: set[str] = frozenset()) -> None:
         remote_by_source = {src: {t.filename for t in tasks}
                             for src, tasks in tasks_by_source.items()}
         synced_families = set(self.cfg.sources)
@@ -197,6 +198,8 @@ class Syncer:
             return source.split("_", 1)[0]
 
         for source in self.db.all_sources():
+            if source in skip:
+                continue
             if family(source) not in synced_families:
                 continue
             remote = remote_by_source.get(source, set())
@@ -224,9 +227,12 @@ class Syncer:
 
         all_tasks: list[Task] = []
         by_source: dict[str, list[Task]] = {}
+        no_prune: set[str] = set()
         for p in planners:
             self.ui.planning(type(p).__name__)
             tasks = p.plan()
+            if not getattr(p, "full_enumeration", True):
+                no_prune.update(getattr(p, "source_names", ()))
             all_tasks.extend(tasks)
             for t in tasks:
                 by_source.setdefault(t.source, []).append(t)
@@ -243,7 +249,7 @@ class Syncer:
                     pass
 
         if self.cfg.prune:
-            self._prune(by_source)
+            self._prune(by_source, no_prune)
 
         self._report()
         self.db.close()

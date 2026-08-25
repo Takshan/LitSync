@@ -441,6 +441,7 @@ def iter_source_files(data_root: Path, sources: list[str], limit: Optional[int])
             yield "pubmed", p
     if "pmc" in sources:
         files = sorted(data_root.glob("pmc/**/*.tar.gz"))
+        files += sorted(data_root.glob("pmc/articles/*/*.xml"))
         for p in files[: limit if limit else None]:
             yield "pmc", p
     if "fda" in sources:
@@ -530,7 +531,12 @@ def run_extraction(data_root: Path, out_dir: Path, sources: list[str],
                         stats["pubmed_files"] += 1
                     elif kind == "pmc":
                         n = 0
-                        for rec in parse_pmc_tar(path, rel):
+                        if path.name.endswith(".xml"):
+                            rec = parse_pmc_article(path.read_bytes(), rel)
+                            rec_iter = iter([rec] if rec is not None else [])
+                        else:
+                            rec_iter = parse_pmc_tar(path, rel)
+                        for rec in rec_iter:
                             stats["records_seen"] += 1
                             if not _record_has_required_text(
                                 rec, require_abstract, require_body, require_text
