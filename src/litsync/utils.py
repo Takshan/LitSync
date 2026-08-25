@@ -92,6 +92,8 @@ def count_articles(path: Path, source: str) -> int:
                 overlap = buf[-(len(needle) - 1):]
         return count
     if source.startswith("pmc"):
+        if name.endswith(".xml"):
+            return 1
         if not name.endswith(".tar.gz"):
             return 0
         count = 0
