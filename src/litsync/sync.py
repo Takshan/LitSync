@@ -45,6 +45,10 @@ class Syncer:
         row = self.db.get(task.source, task.filename)
         on_disk = task.dest.exists()
 
+        # Never seen and not on disk: download without a HEAD round-trip.
+        if row is None and not on_disk:
+            return True, None
+
         if (row is not None and row["status"] == "verified" and on_disk
                 and not self.cfg.reverify and task.immutable):
             recorded = row["remote_size"]
@@ -120,10 +124,12 @@ class Syncer:
                     task.dest.unlink(missing_ok=True)
                     raise IOError(f"md5 mismatch: got {actual}, expected {expected_md5}")
                 self.db.mark(task.source, task.filename,
-                             status="verified", local_md5=actual, error=None)
+                             status="verified", local_md5=actual, error=None,
+                             remote_size=written)
                 self._bump("verified", task.source, written)
             else:
-                self.db.mark(task.source, task.filename, status="verified", error=None)
+                self.db.mark(task.source, task.filename, status="verified",
+                             error=None, remote_size=written)
                 self._bump("verified", task.source, written)
 
             if task.extract:

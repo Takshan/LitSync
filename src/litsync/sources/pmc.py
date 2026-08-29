@@ -131,13 +131,17 @@ class PmcSource:
             ))
 
         db = StateDB(self.cfg.db_path)
-        current = changed = 0
+        scanned = current = changed = 0
         try:
             for key in keys:
                 for article_key, etag in self._read_rows(key):
                     m = ARTICLE_KEY_RE.match(article_key)
                     if not m:
                         continue
+                    scanned += 1
+                    if scanned % 1_000_000 == 0:
+                        LOG.info("pmc: scanned %d article versions (%d to sync so far)",
+                                 scanned, changed)
                     if self._is_current(db, m.group(1), etag):
                         current += 1
                         continue
